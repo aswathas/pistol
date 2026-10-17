@@ -21,8 +21,8 @@ const config: Config = {
         warning: "#fbbf24",
       },
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
-        mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
+        sans: ['Geist', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        mono: ['"Geist Mono"', 'ui-monospace', 'monospace'],
         serif: ['"Instrument Serif"', 'Georgia', 'serif'],
       },
       borderRadius: { sm: "6px", md: "10px", lg: "14px", xl: "20px" },
