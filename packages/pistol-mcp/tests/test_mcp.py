@@ -8,7 +8,7 @@ from pistol.tools import TOOL_REGISTRY, claude_tool_schema
 
 
 def test_registry_size():
-    assert len(TOOL_REGISTRY) == 15
+    assert len(TOOL_REGISTRY) == 53
 
 
 def test_server_module_imports():
@@ -27,7 +27,7 @@ def test_server_has_all_tools():
 
 def test_schema_matches_registry():
     schemas = claude_tool_schema(TOOL_REGISTRY)
-    assert len(schemas) == 15
+    assert len(schemas) == 53
     for s in schemas:
         assert s["name"] in TOOL_REGISTRY
         assert "input_schema" in s
