@@ -13,58 +13,20 @@ from . import cache
 from ..types import Exchange, OHLC, PriceBar, Quote
 
 
-# yfinance (>=0.2) ships a peewee.SqliteDatabase in yfinance.cache for the
-# timezone lookup. peewee creates the underlying sqlite3 connection lazily on
-# first use in whatever thread that is, and the default `check_same_thread`
-# is True. So any subsequent request on a different uvicorn worker thread
-# blows up with "SQLite objects created in a thread can only be used in that
-# same thread." peewee's `Database.connect()` reads from
-# `self.connect_params` (not kwargs), so we set the flag there for every
-# peewee database that exists at import time, and override `connect` to
-# inject the flag at connection time for any future ones. This is the
-# most robust fix and doesn't depend on yfinance internals.
+# yfinance (>=0.2) keeps a peewee.SqliteDatabase cache for timezones, cookies,
+# and ISIN lookups. peewee's own _state object is thread-local, so a connection
+# opened in one thread raises "SQLite objects created in a thread can only
+# be used in that same thread" when used from another. The cleanest fix is
+# to set `dummy = True` on the actual cache singletons (_TzCache,
+# _CookieCache, _ISINCache instances) — the dummy mode is a no-op that
+# returns None for lookups and silently drops stores, so the price-fetching
+# code path is unaffected. We do this at import time, before any yfinance
+# call opens a connection.
 try:
-    import peewee as _pw
-    _orig_connect = _pw.SqliteDatabase.connect
-
-    def _patch_connect_params():
-        for _cls in (_pw.SqliteDatabase,):
-            params = getattr(_cls, "connect_params", None)
-            if isinstance(params, dict):
-                params["check_same_thread"] = False
-
-    _patch_connect_params()
-
-    def _threadsafe_connect(self, *a, **kw):
-        try:
-            self.connect_params["check_same_thread"] = False
-        except Exception:
-            pass
-        # Reopen with the safe flag (closes any previously bound thread).
-        try:
-            self.close()
-        except Exception:
-            pass
-        return _orig_connect(self, *a, **kw)
-
-    _pw.SqliteDatabase.connect = _threadsafe_connect
-
-    # Force any existing instance to drop its connection so the next call
-    # uses the patched connect().
-    try:
-        import yfinance.cache as _yfc
-        for _name in ("_TzCacheManager", "_CookieCacheManager", "_ISINCacheManager"):
-            _cls = getattr(_yfc, _name, None)
-            if _cls is not None:
-                _db = getattr(_cls, "_db", None)
-                if _db is not None:
-                    try:
-                        _db.close()
-                    except Exception:
-                        pass
-                    _db.connect_params["check_same_thread"] = False
-    except Exception:
-        pass
+    import yfinance.cache as _yfc
+    _yfc.get_tz_cache().dummy = True
+    _yfc.get_cookie_cache().dummy = True
+    _yfc.get_isin_cache().dummy = True
 except Exception:
     pass
 
