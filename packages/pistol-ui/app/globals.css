@@ -1,0 +1,46 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body {
+  background: #0a0a0f;
+  color: #ececf1;
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection { background: rgba(139, 92, 246, 0.4); color: #fff; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #26262e; border-radius: 6px; border: 2px solid #0a0a0f; }
+::-webkit-scrollbar-thumb:hover { background: #3a3a45; }
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 12px rgba(139, 92, 246, 0.5); }
+  50% { box-shadow: 0 0 24px rgba(139, 92, 246, 0.8); }
+}
+.brand-glow { animation: pulse-glow 3s ease-in-out infinite; }
+
+@keyframes typing-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-6px); opacity: 1; }
+}
+.typing-dot { animation: typing-bounce 1.4s infinite; }
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.anim-fade { animation: fade-in 0.3s ease-out; }
+
+.prose-tables th, .prose-tables td { padding: 6px 10px; }
+.prose-tables th { color: #8b8b9a; font-weight: 500; text-align: left; border-bottom: 1px solid #26262e; }
+.prose-tables td { border-bottom: 1px solid #1a1a24; }
+.prose-tables tr:last-child td { border-bottom: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .brand-glow, .typing-dot { animation: none; }
+}
