@@ -17,7 +17,9 @@ from ..config import CACHE_TTLS, DB_PATH
 
 def _connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH), timeout=10)
+    conn = sqlite3.connect(str(DB_PATH), timeout=10, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS cache (
@@ -33,13 +35,17 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+import threading as _threading
+_LOCK = _threading.Lock()
 _CONN: sqlite3.Connection | None = None
 
 
 def _conn() -> sqlite3.Connection:
     global _CONN
     if _CONN is None:
-        _CONN = _connect()
+        with _LOCK:
+            if _CONN is None:
+                _CONN = _connect()
     return _CONN
 
 
@@ -50,11 +56,12 @@ def _key(data_type: str, **params: Any) -> str:
 
 def get(data_type: str, **params: Any) -> Any | None:
     """Return cached value if present and not expired, else None."""
-    conn = _conn()
-    row = conn.execute(
-        "SELECT value, created_at, ttl FROM cache WHERE key = ?",
-        (_key(data_type, **params),),
-    ).fetchone()
+    with _LOCK:
+        conn = _conn()
+        row = conn.execute(
+            "SELECT value, created_at, ttl FROM cache WHERE key = ?",
+            (_key(data_type, **params),),
+        ).fetchone()
     if row is None:
         return None
     value_json, created_at, ttl = row
@@ -67,17 +74,19 @@ def set(data_type: str, value: Any, ttl: int | None = None, **params: Any) -> No
     """Store value in cache. ttl defaults to CACHE_TTLS[data_type] if not set."""
     if ttl is None:
         ttl = CACHE_TTLS.get(data_type, 3600)
-    conn = _conn()
-    conn.execute(
-        "INSERT OR REPLACE INTO cache (key, value, created_at, ttl) VALUES (?, ?, ?, ?)",
-        (
-            _key(data_type, **params),
-            json.dumps(value, default=str),
-            time.time(),
-            ttl,
-        ),
-    )
-    conn.commit()
+    payload = json.dumps(value, default=str)
+    with _LOCK:
+        conn = _conn()
+        conn.execute(
+            "INSERT OR REPLACE INTO cache (key, value, created_at, ttl) VALUES (?, ?, ?, ?)",
+            (
+                _key(data_type, **params),
+                payload,
+                time.time(),
+                ttl,
+            ),
+        )
+        conn.commit()
 
 
 def get_or_set(data_type: str, factory, **params: Any) -> Any:
@@ -92,19 +101,21 @@ def get_or_set(data_type: str, factory, **params: Any) -> Any:
 
 def clear(data_type: str | None = None) -> int:
     """Delete cached entries. If data_type given, only that type. Return count deleted."""
-    conn = _conn()
-    if data_type is None:
-        cur = conn.execute("DELETE FROM cache")
-    else:
-        cur = conn.execute("DELETE FROM cache WHERE key LIKE ?", (f"{data_type}::%",))
-    conn.commit()
+    with _LOCK:
+        conn = _conn()
+        if data_type is None:
+            cur = conn.execute("DELETE FROM cache")
+        else:
+            cur = conn.execute("DELETE FROM cache WHERE key LIKE ?", (f"{data_type}::%",))
+        conn.commit()
     return cur.rowcount
 
 
 def stats() -> dict[str, int]:
-    conn = _conn()
-    total = conn.execute("SELECT COUNT(*) FROM cache").fetchone()[0]
-    expired = conn.execute(
-        "SELECT COUNT(*) FROM cache WHERE created_at + ttl < ?", (time.time(),)
-    ).fetchone()[0]
+    with _LOCK:
+        conn = _conn()
+        total = conn.execute("SELECT COUNT(*) FROM cache").fetchone()[0]
+        expired = conn.execute(
+            "SELECT COUNT(*) FROM cache WHERE created_at + ttl < ?", (time.time(),)
+        ).fetchone()[0]
     return {"total": total, "expired": expired, "active": total - expired}
