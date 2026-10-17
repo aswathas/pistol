@@ -5,10 +5,10 @@
 html, body {
   background: #0a0a0f;
   color: #ececf1;
-  font-family: 'Geist', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: 'Sora', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  font-feature-settings: "ss01" 1, "cv11" 1;
+  font-feature-settings: "ss01" 1, "ss03" 1;
 }
 
 ::selection { background: rgba(139, 92, 246, 0.4); color: #fff; }
