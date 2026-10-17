@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import json
+import pandas as pd
 import os
 
 import inspect
@@ -10,7 +11,7 @@ import re
 from . import charts, compute
 from .compute import indicators as ind, patterns as pat, signals as sig, volatility as vol, statistics as stat, portfolio as pf, screeners as scr
 from .data import fii_dii, news, yfinance
-from .types import ChartSpec, PriceBar, Quote, ToolResult
+from .types import ChartSpec, Fundamentals, PriceBar, Quote, ToolResult
 
 # Aliases for back-compat with merged vol/portfolio functions
 volatility = vol
@@ -194,16 +195,155 @@ def get_stock_news(symbol, limit=10):
     return ToolResult(tool="get_stock_news", symbol=sym, data={"items": items}, source="google_news")
 
 
-def get_shareholding(symbol):
-    return ToolResult(tool="get_shareholding", symbol=symbol.upper(), data={"error": "shareholding coming in v0.2"}, source="stub")
+def get_shareholding(symbol, periods=4):
+    """Fetch shareholding pattern (major/institutional holders)."""
+    sym = symbol.upper()
+    t, _ = _yfinance_ticker(sym)
+    try:
+        major = t.major_holders
+        institutional = t.institutional_holders
+    except Exception:
+        major, institutional = None, None
+
+    rows = []
+    if major is not None and not major.empty:
+        for _, r in major.iterrows():
+            pct = r.iloc[0] if len(r) > 0 else None
+            label = r.index[0] if hasattr(r, "index") else None
+            if isinstance(pct, str) and pct.endswith("%"):
+                pct = float(pct.rstrip("%"))
+            rows.append({"holder": str(label) if label is not None else "Unknown", "pct": float(pct) if pct is not None else None})
+
+    snapshot = {
+        "symbol": sym,
+        "period": "current",
+        "major_holders": rows,
+        "institutional_holders": (
+            institutional.fillna("").to_dict(orient="records") if institutional is not None and not institutional.empty else []
+        ),
+        "source": "yfinance",
+    }
+    note = None
+    if not rows and not snapshot["institutional_holders"]:
+        note = "yfinance returned no holders; historical quarters require NSE API; coming v0.2"
+
+    chart = charts.pie_chart(
+        title=f"{sym} major holders",
+        labels=[r["holder"] for r in rows] or ["n/a"],
+        values=[r["pct"] for r in rows] or [1.0],
+    )
+    return ToolResult(tool="get_shareholding", symbol=sym, data=snapshot, chart=chart, source="yfinance", note=note)
 
 
-def get_financials(symbol):
-    return ToolResult(tool="get_financials", symbol=symbol.upper(), data={"error": "fundamentals coming in v0.2"}, source="stub")
+
+def get_financials(symbol, period="annual", years=5):
+    """Fetch P&L / balance sheet / cashflow from yfinance as Fundamentals list."""
+    sym = symbol.upper()
+    t, _ = _yfinance_ticker(sym)
+    try:
+        if period == "quarterly":
+            pl = t.quarterly_financials
+            bs = t.quarterly_balance_sheet
+            cf = t.quarterly_cashflow
+        else:
+            pl = t.financials
+            bs = t.balance_sheet
+            cf = t.cashflow
+    except Exception as e:
+        return ToolResult(tool="get_financials", symbol=sym, data={"error": str(e)}, source="yfinance")
+
+    periods_list = list(pl.columns) if pl is not None and not pl.empty else []
+    out = []
+    for col in periods_list:
+        ts = pd_ts_str(col)
+        bs_col = None
+        if bs is not None and not bs.empty:
+            for c in bs.columns:
+                if pd_ts_str(c) == ts:
+                    bs_col = c
+                    break
+        bs_col = bs_col or (bs.columns[0] if bs is not None and not bs.empty else None)
+
+        rev = _gv(pl, col, "Total Revenue", "Operating Revenue")
+        op_inc = _gv(pl, col, "Operating Income", "Operating Income Loss")
+        ni = _gv(pl, col, "Net Income")
+        eps_val = _gv(pl, col, "Diluted EPS")
+        if eps_val is None:
+            eps_val = _gv(pl, col, "Basic EPS")
+
+        ta = _gv(bs, bs_col, "Total Assets")
+        td = _gv(bs, bs_col, "Total Debt")
+        if td is None:
+            td = _gv(bs, bs_col, "Long Term Debt")
+        te = _gv(bs, bs_col, "Stockholders Equity", "Total Equity Gross Minority Interest")
+        bv = _gv(bs, bs_col, "Common Stock Equity", "Stockholders Equity", "Total Equity Gross Minority Interest")
+
+        ocf = _gv(cf, bs_col, "Operating Cash Flow", "Cash Flow From Continuing Operating Activities")
+        capex = _gv(cf, bs_col, "Capital Expenditure", "Purchase Of Property Plant Equipment")
+
+        fcf = None
+        if ocf is not None and capex is not None:
+            fcf = ocf + capex
+
+        d = Fundamentals(
+            symbol=sym, period=ts,
+            revenue=rev, operating_income=op_inc, net_income=ni, eps=eps_val,
+            book_value=bv, total_assets=ta, total_debt=td, total_equity=te,
+            operating_cf=ocf, capex=capex, fcf=fcf,
+            source=f"yfinance ({period})",
+        ).model_dump(mode="json")
+        out.append(d)
+
+    table_cols = ["period", "revenue", "operating_income", "net_income", "eps", "total_assets", "total_debt", "total_equity", "operating_cf", "fcf"]
+    chart = charts.screener_table(f"{sym} {period} fundamentals", out, table_cols) if out else None
+    return ToolResult(tool="get_financials", symbol=sym, data={"fundamentals": out}, chart=chart, source=f"yfinance ({period})")
 
 
-def get_corporate_actions(symbol):
-    return ToolResult(tool="get_corporate_actions", symbol=symbol.upper(), data={"error": "corporate_actions coming in v0.2"}, source="stub")
+
+
+def get_corporate_actions(symbol, years=5):
+    """Fetch dividends + splits from yfinance. Bonus/demerger from NSE if accessible."""
+    sym = symbol.upper()
+    t, _ = _yfinance_ticker(sym)
+    out = {"dividends": [], "splits": [], "bonus_issues": [], "demergers": []}
+    source = "yfinance (splits+dividends only)"
+    try:
+        actions = t.actions
+        if actions is not None and not actions.empty:
+            for idx, row in actions.iterrows():
+                ts = pd_ts_str(idx)
+                div = row.get("Dividends") if hasattr(row, "get") else None
+                sp = row.get("Stock Splits") if hasattr(row, "get") else None
+                if div is not None and float(div) != 0:
+                    out["dividends"].append({"date": ts, "amount": float(div)})
+                if sp is not None and float(sp) != 0:
+                    out["splits"].append({"date": ts, "ratio": float(sp)})
+    except Exception:
+        pass
+
+    try:
+        import requests
+        end = datetime.now().strftime("%d-%m-%Y")
+        start = (datetime.now() - timedelta(days=365 * years)).strftime("%d-%m-%Y")
+        url = f"https://www.nseindia.com/api/corporate-announcements?index=equities&symbol={sym}&from_date={start}&to_date={end}"
+        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+        r = requests.get(url, headers=headers, timeout=8)
+        if r.status_code == 200:
+            data = r.json()
+            for item in (data if isinstance(data, list) else []):
+                desc = (item.get("desc") or "").lower()
+                ts = item.get("an_dt") or item.get("dissemDT") or ""
+                if "bonus" in desc:
+                    out["bonus_issues"].append({"date": ts, "description": item.get("desc", "")})
+                elif "demerger" in desc:
+                    out["demergers"].append({"date": ts, "description": item.get("desc", "")})
+            if out["bonus_issues"] or out["demergers"]:
+                source = "yfinance + NSE"
+    except Exception:
+        pass
+
+    return ToolResult(tool="get_corporate_actions", symbol=sym, data=out, source=source)
+
 
 
 def get_company_profile(symbol):
@@ -881,6 +1021,402 @@ __all__ = [
     "claude_tool_schema", "ToolResult",
 ]
 
+
+
+# === added by merge from feat/fundamentals-shareholding ===
+def _first_row(df, *keys):
+    if df is None or df.empty:
+        return None
+    idx_lower = [str(i).lower() for i in df.index]
+    for k in keys:
+        kl = k.lower()
+        for i, name in enumerate(idx_lower):
+            if kl in name:
+                return df.iloc[i]
+    return None
+
+
+
+def _get_annual_fundamentals(symbol):
+    res = get_financials(symbol, period="annual", years=5)
+    if res.data and "fundamentals" in res.data:
+        return res.data["fundamentals"]
+    return []
+
+
+
+def _gv(df, col, *keys):
+    row = _first_row(df, *keys)
+    if row is None:
+        return None
+    try:
+        v = row[col]
+    except Exception:
+        return None
+    if v is None:
+        return None
+    try:
+        f = float(v)
+        return f if f == f else None
+    except Exception:
+        return None
+
+
+
+
+def _info(symbol):
+    t, _ = _yfinance_ticker(symbol)
+    try:
+        return t.info or {}
+    except Exception:
+        return {}
+
+
+
+def _safe_div(a, b):
+    if a is None or b is None or b == 0:
+        return None
+    try:
+        return float(a) / float(b)
+    except Exception:
+        return None
+
+
+
+
+def _yfinance_ticker(symbol):
+    import yfinance as yf
+    s = symbol.upper().strip()
+    ns_sym = s if s.endswith(".NS") or s.endswith(".BO") else f"{s}.NS"
+    return yf.Ticker(ns_sym), ns_sym
+
+
+
+def pd_ts_str(col):
+    try:
+        if hasattr(col, "strftime"):
+            return col.strftime("%Y-%m-%d")
+        if hasattr(col, "year"):
+            return f"{col.year}-{getattr(col, 'month', 1):02d}"
+    except Exception:
+        pass
+    return str(col)
+
+
+
+
+def get_bulk_block_deals(symbol, days=90):
+    """Bulk/block deals from NSE; stub fallback when blocked."""
+    sym = symbol.upper()
+    try:
+        import requests
+        end = datetime.now().strftime("%d-%m-%Y")
+        start = (datetime.now() - timedelta(days=days)).strftime("%d-%m-%Y")
+        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+        out = {"bulk_deals": [], "block_deals": []}
+        for kind, path in (("bulk_deals", "/api/bulk-deal"), ("block_deals", "/api/block-deal")):
+            url = f"https://www.nseindia.com{path}?from_date={start}&to_date={end}"
+            try:
+                r = requests.get(url, headers=headers, timeout=8)
+                if r.status_code == 200:
+                    items = r.json()
+                    for it in (items if isinstance(items, list) else []):
+                        if (it.get("symbol") or "").upper() == sym:
+                            out[kind].append(it)
+            except Exception:
+                continue
+        return ToolResult(tool="get_bulk_block_deals", symbol=sym, data=out, source="NSE")
+    except Exception:
+        return ToolResult(
+            tool="get_bulk_block_deals",
+            symbol=sym,
+            data={"bulk_deals": [], "block_deals": []},
+            source="stub",
+            note="NSE block/bulk deal API blocked or unavailable; coming v0.2",
+        )
+
+
+
+def get_dividend_history(symbol, years=10):
+    """yfinance dividends time series; aggregate by year."""
+    sym = symbol.upper()
+    t, _ = _yfinance_ticker(sym)
+    out = {"by_year": {}, "by_date": []}
+    try:
+        divs = t.dividends
+        if divs is not None and not divs.empty:
+            for idx, amt in divs.items():
+                ts = pd_ts_str(idx)
+                y = idx.year if hasattr(idx, "year") else None
+                out["by_date"].append({"date": ts, "amount": float(amt)})
+                if y:
+                    out["by_year"][str(y)] = out["by_year"].get(str(y), 0.0) + float(amt)
+    except Exception:
+        pass
+    info = _info(sym)
+    price = info.get("currentPrice") or info.get("regularMarketPrice")
+    if price and out["by_year"]:
+        latest_year = max(out["by_year"].keys())
+        out["yield_latest_year_pct"] = round(out["by_year"][latest_year] / price * 100, 2)
+    return ToolResult(tool="get_dividend_history", symbol=sym, data=out, source="yfinance")
+
+
+
+def get_earnings_calendar(symbol):
+    """Next earnings date + last quarters with surprise."""
+    sym = symbol.upper()
+    t, _ = _yfinance_ticker(sym)
+    out = {"next_earnings": None, "past_quarters": []}
+    try:
+        cal = t.calendar
+        if cal is not None and not cal.empty:
+            try:
+                out["next_earnings"] = pd_ts_str(cal.iloc[0, 0])
+            except Exception:
+                pass
+    except Exception:
+        pass
+    try:
+        ed = t.earnings_dates
+        if ed is not None and not ed.empty:
+            for idx, row in ed.head(8).iterrows():
+                ts = pd_ts_str(idx)
+                actual = row.get("Reported EPS") if hasattr(row, "get") else None
+                estimate = row.get("EPS Estimate") if hasattr(row, "get") else None
+                surprise = None
+                if actual is not None and estimate is not None:
+                    try:
+                        surprise = float(actual) - float(estimate)
+                    except Exception:
+                        surprise = None
+                out["past_quarters"].append({
+                    "date": ts,
+                    "actual_eps": float(actual) if actual is not None else None,
+                    "estimate_eps": float(estimate) if estimate is not None else None,
+                    "surprise": surprise,
+                })
+    except Exception:
+        pass
+    return ToolResult(tool="get_earnings_calendar", symbol=sym, data=out, source="yfinance")
+
+
+
+def get_financial_ratios(symbol, years=5):
+    """Compute valuation + profitability ratios from annual fundamentals + current price."""
+    sym = symbol.upper()
+    info = _info(sym)
+    price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose")
+    mc = info.get("marketCap")
+    shares = info.get("sharesOutstanding")
+    fundamentals = _get_annual_fundamentals(sym)
+    if not fundamentals:
+        return ToolResult(tool="get_financial_ratios", symbol=sym, data={"error": "no fundamentals"}, source="compute")
+
+    latest = fundamentals[0]
+    prev = fundamentals[1] if len(fundamentals) > 1 else None
+    rev = latest.get("revenue")
+    op_inc = latest.get("operating_income")
+    ni = latest.get("net_income")
+    eps = latest.get("eps")
+    ta = latest.get("total_assets")
+    td = latest.get("total_debt")
+    te = latest.get("total_equity")
+    bv = latest.get("book_value")
+    fcf = latest.get("fcf")
+
+    ttm_eps = None
+    try:
+        qres = get_financials(sym, period="quarterly", years=2)
+        qf = (qres.data or {}).get("fundamentals", [])
+        eps_vals = [q.get("eps") for q in qf[:4] if q.get("eps") is not None]
+        if eps_vals:
+            ttm_eps = sum(eps_vals)
+    except Exception:
+        pass
+
+    cash = info.get("totalCash")
+    ev = (mc + (td or 0) - (cash or 0)) if mc is not None else None
+    bv_per_share = _safe_div(bv, shares) if (bv is not None and shares) else None
+
+    rev_prev = prev.get("revenue") if prev else None
+    eps_prev = prev.get("eps") if prev else None
+    rev_growth = _safe_div(rev - rev_prev, rev_prev) if (rev is not None and rev_prev) else None
+    eps_growth = _safe_div(eps - eps_prev, eps_prev) if (eps is not None and eps_prev) else None
+    capital_employed = (ta - (td or 0)) if ta is not None else None
+
+    ratios = {
+        "pe": _safe_div(price, ttm_eps if ttm_eps is not None else eps),
+        "pb": _safe_div(price, bv_per_share),
+        "ev_ebitda": _safe_div(ev, op_inc),
+        "roe": _safe_div(ni, te),
+        "roce": _safe_div(op_inc, capital_employed),
+        "debt_to_equity": _safe_div(td, te),
+        "current_ratio": None,
+        "gross_margin": None,
+        "operating_margin": _safe_div(op_inc, rev),
+        "net_margin": _safe_div(ni, rev),
+        "revenue_growth_yoy": rev_growth,
+        "eps_growth_yoy": eps_growth,
+        "dividend_yield": info.get("dividendYield"),
+        "payout_ratio": info.get("payoutRatio"),
+        "fcf_yield": _safe_div(fcf, mc),
+    }
+    out = {k: (round(v, 4) if isinstance(v, float) else v) for k, v in ratios.items()}
+    return ToolResult(tool="get_financial_ratios", symbol=sym, data=out, source="compute (yfinance fundamentals + info)")
+
+
+
+
+def get_industry_comparison(symbol, peers_json=None):
+    """Compare key ratios across sector peers."""
+    sym = symbol.upper()
+    info = _info(sym)
+    sector = info.get("sector") or "Default"
+    peers = peers_json or SECTOR_PEERS.get(sector) or SECTOR_PEERS["Default"]
+    targets = [sym] + [p for p in peers if p.upper() != sym]
+    rows = []
+    for p in targets:
+        try:
+            res = get_financial_ratios(p)
+            d = res.data if res.data else {}
+            rows.append({
+                "symbol": p,
+                "pe": d.get("pe"),
+                "pb": d.get("pb"),
+                "roe": d.get("roe"),
+                "roce": d.get("roce"),
+                "net_margin": d.get("net_margin"),
+                "debt_to_equity": d.get("debt_to_equity"),
+                "revenue_growth_yoy": d.get("revenue_growth_yoy"),
+            })
+        except Exception:
+            rows.append({"symbol": p, "error": "fetch failed"})
+    chart = charts.screener_table(
+        f"{sym} vs {sector} peers",
+        rows,
+        ["symbol", "pe", "pb", "roe", "roce", "net_margin", "debt_to_equity", "revenue_growth_yoy"],
+    )
+    return ToolResult(tool="get_industry_comparison", symbol=sym, data={"sector": sector, "comparison": rows}, chart=chart, source="compute")
+
+
+
+def get_promoter_pledge(symbol):
+    """Promoter pledge data from BSE; stub fallback."""
+    sym = symbol.upper()
+    try:
+        import requests
+        url = f"https://api.bseindia.com/BseIndiaAPI/api/AnnouncementGetData/w?strSearch=PLEDGE&strSymbol={sym}"
+        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+        r = requests.get(url, headers=headers, timeout=8)
+        if r.status_code == 200:
+            return ToolResult(tool="get_promoter_pledge", symbol=sym, data={"announcements": r.json()}, source="BSE")
+    except Exception:
+        pass
+    return ToolResult(
+        tool="get_promoter_pledge",
+        symbol=sym,
+        data={"pledged_pct": None},
+        source="stub",
+        note="BSE pledge API unavailable; consult shareholding pattern disclosure in v0.2",
+    )
+
+
+
+
+def get_quality_score(symbol):
+    """Piotroski F-Score + Altman Z-Score + composite."""
+    sym = symbol.upper()
+    fundamentals = _get_annual_fundamentals(sym)
+    if not fundamentals or len(fundamentals) < 2:
+        return ToolResult(tool="get_quality_score", symbol=sym, data={"error": "need 2+ years of fundamentals"}, source="compute")
+
+    cur, prev = fundamentals[0], fundamentals[1]
+
+    def t(v):
+        return v is not None and isinstance(v, (int, float))
+
+    ni_cur = cur.get("net_income")
+    ni_prev = prev.get("net_income")
+    te_cur = cur.get("total_equity")
+    te_prev = prev.get("total_equity")
+    roe_cur = _safe_div(ni_cur, te_cur)
+    roe_prev = _safe_div(ni_prev, te_prev)
+    at_cur = _safe_div(cur.get("revenue"), cur.get("total_assets"))
+    at_prev = _safe_div(prev.get("revenue"), prev.get("total_assets"))
+
+    piotroski = {
+        "net_income_positive": bool(t(ni_cur) and ni_cur > 0),
+        "ocf_positive": bool(t(cur.get("operating_cf")) and cur["operating_cf"] > 0),
+        "roe_improving": bool(roe_cur is not None and roe_prev is not None and roe_cur > roe_prev),
+        "fcf_positive": bool(t(cur.get("fcf")) and cur["fcf"] > 0),
+        "debt_decreasing": bool(t(cur.get("total_debt")) and t(prev.get("total_debt")) and cur["total_debt"] <= prev["total_debt"]),
+        "current_ratio_improving": None,
+        "shares_dilution": None,
+        "gross_margin_improving": None,
+        "asset_turnover_improving": bool(at_cur is not None and at_prev is not None and at_cur > at_prev),
+    }
+
+    score = sum(1 for v in piotroski.values() if v is True)
+    max_score = sum(1 for v in piotroski.values() if v is not None)
+
+    info = _info(sym)
+    mc = info.get("marketCap")
+    wc = None
+    if info.get("totalCurrentAssets") is not None and info.get("totalCurrentLiabilities") is not None:
+        wc = info["totalCurrentAssets"] - info["totalCurrentLiabilities"]
+    A = _safe_div(wc, cur.get("total_assets")) or 0
+    C = _safe_div(cur.get("operating_income"), cur.get("total_assets")) or 0
+    D = _safe_div(mc, cur.get("total_debt")) or 0
+    E = _safe_div(cur.get("revenue"), cur.get("total_assets")) or 0
+    altman_z = 1.2 * A + 1.4 * 0 + 3.3 * C + 0.6 * D + 1.0 * E
+
+    composite = round((score / max_score * 10) if max_score else 0, 2)
+    out = {
+        "piotroski_f_score": f"{score}/{max_score}",
+        "piotroski_tests": piotroski,
+        "altman_z_score": round(altman_z, 2),
+        "composite_quality": composite,
+    }
+    return ToolResult(tool="get_quality_score", symbol=sym, data=out, source="compute")
+
+
+
+
+def get_valuation_vs_sector(symbol):
+    """Compare stock's ratios against sector median."""
+    sym = symbol.upper()
+    info = _info(sym)
+    sector = info.get("sector") or "Default"
+    peers = [p for p in (SECTOR_PEERS.get(sector) or SECTOR_PEERS["Default"]) if p.upper() != sym]
+    stock_res = get_financial_ratios(sym)
+    stock_data = stock_res.data if stock_res.data else {}
+    peer_ratios = {p: get_financial_ratios(p).data for p in peers}
+
+    keys = ["pe", "pb", "ev_ebitda", "roe", "net_margin", "debt_to_equity"]
+    out = {}
+    for k in keys:
+        stock_v = stock_data.get(k)
+        peer_vals = []
+        for v in peer_ratios.values():
+            if v and isinstance(v.get(k), (int, float)):
+                peer_vals.append(v[k])
+        if peer_vals:
+            s = sorted(peer_vals)
+            n = len(s)
+            median = s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+        else:
+            median = None
+        premium = ((stock_v - median) / median * 100) if (stock_v is not None and median) else None
+        out[k] = {
+            "stock": stock_v,
+            "sector_median": median,
+            "premium_pct": round(premium, 2) if premium is not None else None,
+        }
+    return ToolResult(tool="get_valuation_vs_sector", symbol=sym, data={"sector": sector, "ratios": out}, source="compute")
+
+
+
+
 TOOL_REGISTRY = {
     "get_stock_quote": get_stock_quote,
     "get_price_history": get_price_history,
@@ -927,4 +1463,13 @@ TOOL_REGISTRY = {
     "search_stocks": search_stocks,
     "get_batch_quotes": get_batch_quotes,
     "get_intraday_ticks": get_intraday_ticks,
+
+    "get_bulk_block_deals": get_bulk_block_deals,
+    "get_dividend_history": get_dividend_history,
+    "get_earnings_calendar": get_earnings_calendar,
+    "get_financial_ratios": get_financial_ratios,
+    "get_industry_comparison": get_industry_comparison,
+    "get_promoter_pledge": get_promoter_pledge,
+    "get_quality_score": get_quality_score,
+    "get_valuation_vs_sector": get_valuation_vs_sector,
 }

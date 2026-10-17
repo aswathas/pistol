@@ -1,6 +1,6 @@
 """pistol chat — AI-native web app, MVP demo.
 
-One file. FastAPI + raw HTML + 15 tools via pistol.tools.TOOL_REGISTRY + Claude call.
+One file. FastAPI + raw HTML + 53 tools via pistol.tools.TOOL_REGISTRY + Claude call.
 Run: ANTHROPIC_BASE_URL=... ANTHROPIC_AUTH_TOKEN=... uvicorn pistol.chat_app:app
 
 The chat is the wedge. This file proves: type natural language, Claude picks
@@ -33,7 +33,7 @@ TOOL_SCHEMAS = claude_tool_schema(TOOL_REGISTRY)
 
 SYSTEM_PROMPT = """You are pistol, an AI agent for the Indian stock market. You answer in plain English, you call tools when needed, and you explain what you see.
 
-You have 15 tools: get_stock_quote, get_price_history, get_indicator (rsi/ema/sma/macd/bollinger/atr/adx/stochastic/cci/williams_r/roc/mfi/obv/vwap/ichimoku/parabolic_sar/keltner/donchian/aroon/supertrend), get_candlestick_patterns, get_signals, screen_stocks, backtest_sma, get_market_news, get_stock_news, get_shareholding, get_financials, get_corporate_actions, get_company_profile, get_top_movers, get_advanced_chart.
+You have 53 tools: get_stock_quote, get_price_history, get_indicator (rsi/ema/sma/macd/bollinger/atr/adx/stochastic/cci/williams_r/roc/mfi/obv/vwap/ichimoku/parabolic_sar/keltner/donchian/aroon/supertrend), get_candlestick_patterns, get_signals, screen_stocks, backtest_sma, get_market_news, get_stock_news, get_shareholding, get_financials, get_corporate_actions, get_company_profile, get_top_movers, get_advanced_chart.
 
 When the user asks about a stock, call the most specific tool. Be specific about numbers and what they mean. Be brief."""
 
@@ -72,7 +72,7 @@ class ChatRequest(BaseModel):
 
 @app.post("/api/chat")
 def chat(req: ChatRequest):
-    """Run a chat turn. May call any of 15 tools. Returns {reply, tool_call, tool_result, chart}."""
+    """Run a chat turn. May call any of 53 tools. Returns {reply, tool_call, tool_result, chart}."""
     messages = list(req.messages)
     resp = _call_claude(messages)
     if "error" in resp:
@@ -226,7 +226,7 @@ HTML = """<!doctype html>
   <div class="meta">
     <strong>110 tools, all free</strong>
     1 dev · MIT · v0.1 demo<br>
-    Powered by Claude + 15 tools wired
+    Powered by Claude + 53 tools wired
   </div>
 </aside>
 <main class="main">
@@ -239,7 +239,7 @@ HTML = """<!doctype html>
   <div class="chat" id="chat">
     <div class="empty">
       <h2>Ask anything about Indian stocks.</h2>
-      <p>Free AI agent with 15 tools: quotes, charts, indicators, news, screeners, backtests.</p>
+      <p>Free AI agent with 53 tools: quotes, charts, indicators, news, screeners, backtests.</p>
       <div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center;max-width:640px;margin:0 auto;">
         <button class="ex" data-q="Show me RELIANCE 14-day RSI with a chart">RELIANCE 14-day RSI with a chart</button>
         <button class="ex" data-q="What does TCS's price look like over the last 6 months?">TCS 6-month price chart</button>

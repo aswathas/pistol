@@ -1,13 +1,12 @@
 # pistol
 
-Indian stock market data + compute engine. **110 tools, all free, AI-native.** Ship 15 today, ship the rest as the compute library already supports them.
+Indian stock market data + compute engine. **53 tools, all free, AI-native.** Real NSE/BSE data, real-time quotes, technicals, fundamentals, screeners, portfolio, backtests, news, breadth, FII/DII.
 
-pistol is a Python toolkit + MCP server that gives any LLM (Claude, GPT, Gemini) full access to NSE/BSE quotes, technicals, fundamentals, news, screeners, and portfolio analytics — through a single, free, MIT-licensed package. No API keys, no paid tiers, no signup.
+pistol is a Python toolkit + MCP server that gives any LLM (Claude, GPT, Gemini) full access to NSE/BSE quotes, technicals, fundamentals, news, screeners, and portfolio analytics — through a single, free, MIT-licensed package. No signup. No quota. No paid tier.
 
 ```
                 ┌──────────────┐
-                │  pistol-core │  (data + compute + tool registry)
-                │   15 tools   │
+                │  pistol-core │  (data + compute + 53 tools)
                 └──────┬───────┘
                        │
         ┌──────────────┴───────────────┐
@@ -38,7 +37,7 @@ uvicorn pistol.chat_app:app --host 127.0.0.1 --port 8000
 # open http://127.0.0.1:8000
 ```
 
-The chat picks any of the 15 tools based on your question, fetches data, and renders the chart inline.
+The chat picks any of the 53 tools based on your question, fetches data, and renders charts inline.
 
 ## Run as an MCP server (Claude Code, Cursor, etc.)
 
@@ -49,33 +48,64 @@ claude mcp add pistol -- python -m pistol_mcp.server
 Then in any Claude Code session:
 
 > "Show me RELIANCE 14-day RSI"
-> "What's the latest news on TCS?"
+> "What's the Piotroski F-Score of TCS?"
 > "Backtest INFY SMA crossover for 5 years"
 > "Top movers in the Nifty 50 right now"
+> "Compare RELIANCE with sector peers"
 
-## The 15 tools (shipped in v0.1)
+## The 53 tools (shipped in v0.1)
 
-| Tool | One-liner |
-|------|-----------|
-| `get_stock_quote` | Live LTP/volume/OHLC for any NSE symbol |
-| `get_price_history` | OHLCV bars + line chart |
-| `get_indicator` | RSI/EMA/SMA/MACD/Bollinger/ATR/ADX/Stochastic/CCI/Williams %R/ROC/MFI/OBV/VWAP/Ichimoku/Parabolic SAR/Keltner/Donchian/Aroon/Supertrend |
-| `get_candlestick_patterns` | Detect 12 candlestick patterns on recent bars |
-| `get_signals` | Run 8 signal detectors: golden/death cross, MACD crossover, RSI overbought/oversold, volume spike, 52w breakout/breakdown |
-| `screen_stocks` | Run a preset screener across a universe |
-| `backtest_sma` | SMA crossover backtest over N years |
-| `get_market_news` | Top Indian market news from Google News RSS |
-| `get_stock_news` | Stock-specific news search |
-| `get_shareholding` | Stub — coming in v0.2 |
-| `get_financials` | Stub — coming in v0.2 |
-| `get_corporate_actions` | Stub — coming in v0.2 |
-| `get_company_profile` | Name, sector, industry from yfinance |
-| `get_top_movers` | Top movers by abs % change across Nifty 50 |
-| `get_advanced_chart` | Candlestick or line chart wrapper |
+### Quotes & discovery (5)
+`get_stock_quote`, `search_stocks`, `get_batch_quotes`, `get_company_profile`, `list_indices`
 
-## Roadmap to 110
+### Price history (5)
+`get_price_history`, `get_intraday_ticks`, `get_advanced_chart`, `get_market_pulse`, `get_market_pulse_with_flows`
 
-The compute layer (`pistol.compute`) already ships 20 indicators, 12 candlestick patterns, 8 signals, 5 volatility estimators, 4 stats primitives, 10+ screeners, and a backtest engine. v0.2 wraps each one as a public tool, plus adds paid data integrations (XBRL fundamentals, NSE shareholding, delivery %, corporate actions). v0.3 adds FII/DII flow, MF holdings, and macro (RBI). v0.4 adds LLM-generated research reports and portfolio analytics. All free, all MIT.
+### Technical indicators (1 umbrella tool + 20 indicators)
+`get_indicator` with: rsi, ema, sma, macd, bollinger, atr, adx, stochastic, cci, williams_r, roc, mfi, obv, vwap, ichimoku, parabolic_sar, keltner, donchian, aroon, supertrend
+
+### Candlestick patterns (1 umbrella tool + 12 patterns)
+`get_candlestick_patterns`: doji, hammer, shooting_star, engulfing_bullish/bearish, morning_star, evening_star, three_white_soldiers, three_black_crows, harami_bullish/bearish, marubozu
+
+### Volatility (5)
+`get_historical_volatility`, `get_parkinson_volatility`, `get_garman_klass_volatility`, `get_yang_zhang_volatility`, `get_hurst_exponent`
+
+### Statistics (3)
+`get_z_score`, `get_correlation`, `get_beta`
+
+### Fundamentals (5)
+`get_financials`, `get_financial_ratios`, `get_industry_comparison`, `get_valuation_vs_sector`, `get_quality_score` (Piotroski + Altman Z)
+
+### Shareholding & corporate (4)
+`get_shareholding`, `get_dividend_history`, `get_earnings_calendar`, `get_bulk_block_deals`, `get_promoter_pledge`, `get_corporate_actions`
+
+### Market breadth (5)
+`get_top_movers`, `get_market_breadth`, `get_new_highs_lows`, `get_market_heatmap`, `get_sector_rotation`
+
+### Indices & macro (3)
+`get_index_performance`, `get_india_vix`, `get_fii_dii_flows`
+
+### Signals (1 umbrella tool)
+`get_signals`: golden_cross, death_cross, macd_crossover, rsi_oversold, rsi_overbought, volume_spike, breakout_52w_high, breakdown_52w_low
+
+### Screeners (1)
+`screen_stocks`, `screen_by_indicator`
+
+### Backtest (1)
+`backtest_sma`, `backtest_sma_crossover`
+
+### Portfolio (5)
+`portfolio_sector_concentration`, `portfolio_var`, `portfolio_sharpe`, `portfolio_max_drawdown`, `portfolio_correlation_matrix`
+
+### News (3)
+`get_market_news`, `get_stock_news`, `get_india_market_news`, `get_stock_news_with_sentiment`
+
+## Run the tests
+
+```bash
+cd packages/pistol-core
+pytest -q   # 93 tests
+```
 
 ## Repo layout
 
@@ -84,9 +114,22 @@ pistol/
   packages/
     pistol-core/   # the library + tool registry + web demo
     pistol-mcp/    # MCP server (stdio, talks to pistol-core)
-    pistol-web/    # (reserved for future React/Vite UI)
+    pistol-web/    # (reserved for future)
+  README.md
 ```
+
+## Data sources (all free)
+
+- **yfinance** — quotes, OHLCV, financials, shareholding, dividends, splits, calendar
+- **AMFI** — mutual fund NAVs
+- **NSE public** — corporate announcements, indices (with cookie-jar dance)
+- **BSE public** — scrip search, corporate actions
+- **Google News RSS** — market and stock news
+- **RBI / data.gov.in** — macro (reserved for v0.2)
+- **NSDL** — FII/DII monthly (with fallback snapshot)
+
+No paid vendors. No scraping that violates terms. All data flows degrade gracefully when a source is unavailable.
 
 ## License
 
-MIT — see [LICENSE](packages/pistol-core/LICENSE).
+MIT.

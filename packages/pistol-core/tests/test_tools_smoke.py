@@ -88,14 +88,6 @@ def test_get_stock_news():
     assert r.tool == "get_stock_news"
 
 
-def test_get_shareholding_stub():
-    r = get_shareholding("RELIANCE")
-    assert r.source == "stub"
-
-
-def test_get_financials_stub():
-    r = get_financials("RELIANCE")
-    assert r.source == "stub"
 
 
 def test_get_company_profile():
