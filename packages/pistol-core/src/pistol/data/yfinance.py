@@ -9,54 +9,69 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
-import pandas as pd
-
 from . import cache
 from ..types import Exchange, OHLC, PriceBar, Quote
 
 
 def _to_nse_symbol(symbol: str) -> str:
-    """yfinance uses NSE symbols with .NS suffix (e.g. RELIANCE.NS)."""
+    """yfinance uses NSE symbols with .NS suffix (e.g. RELIANCE.NS).
+    Indices like ^NSEI must be passed as-is; yfinance keys them by caret prefix.
+    """
     s = symbol.upper().strip()
+    if s.startswith("^"):
+        return s
     if s.endswith(".NS") or s.endswith(".BO"):
         return s
     return f"{s}.NS"
 
 
 def quote(symbol: str) -> Quote | None:
-    """Live quote via yfinance. ~15 min delayed but always works."""
+    """Live quote via yfinance. ~15 min delayed but always works.
+    Returns None when yfinance has no data for the symbol.
+    """
     sym = _to_nse_symbol(symbol)
 
     def _fetch():
         import yfinance as yf
 
-        t = yf.Ticker(sym)
-        info = t.fast_info if hasattr(t, "fast_info") else {}
-        price = info.get("last_price") or info.get("previous_close")
-        prev_close = info.get("previous_close")
+        try:
+            t = yf.Ticker(sym)
+            info = t.fast_info if hasattr(t, "fast_info") else {}
+        except Exception:
+            return None
+        if not info:
+            return None
+        # yfinance raises KeyError on missing keys; treat any access failure as None.
+        def _safe(key, default=None):
+            try:
+                v = info.get(key)
+                return v if v is not None else default
+            except Exception:
+                return default
+        price = _safe("lastPrice") or _safe("regularMarketPreviousClose") or _safe("previousClose")
         if price is None:
             return None
+        prev_close = _safe("previousClose") or _safe("regularMarketPreviousClose") or price
+        vol = _safe("lastVolume") or _safe("volume") or 0
         ltp = float(price)
-        change = ltp - float(prev_close) if prev_close else 0.0
-        pct = (change / float(prev_close) * 100) if prev_close else 0.0
-        vol = int(info.get("volume") or 0)
-        day_high = float(info.get("day_high") or ltp)
-        day_low = float(info.get("day_low") or ltp)
-        day_open = float(info.get("open") or ltp)
-        name = info.get("short_name") or info.get("long_name") or symbol
+        pv = float(prev_close)
+        change = ltp - pv
+        pct = (change / pv * 100) if pv else 0.0
         return Quote(
             symbol=symbol.upper(),
             exchange=Exchange.NSE,
-            name=name,
+            name=symbol.upper(),
             ltp=ltp,
             change=change,
             pct_change=pct,
-            volume=vol,
-            bid=None,
-            ask=None,
-            bid_qty=None,
-            ask_qty=None,
-            ohlc=OHLC(open=day_open, high=day_high, low=day_low, close=ltp, volume=vol),
+            volume=int(vol),
+            ohlc=OHLC(
+                open=float(_safe("open") or ltp),
+                high=float(_safe("dayHigh") or ltp),
+                low=float(_safe("dayLow") or ltp),
+                close=ltp,
+                volume=int(vol),
+            ),
             timestamp=datetime.now(),
             source="yfinance",
         ).model_dump(mode="json")
@@ -79,8 +94,11 @@ def price_history(
     def _fetch():
         import yfinance as yf
 
-        t = yf.Ticker(sym)
-        df = t.history(period=period, interval=interval, auto_adjust=False)
+        try:
+            t = yf.Ticker(sym)
+            df = t.history(period=period, interval=interval, auto_adjust=False)
+        except Exception:
+            return []
         if df is None or df.empty:
             return []
         bars = []
@@ -107,7 +125,7 @@ def price_history(
 
 def search(query: str, limit: int = 20) -> list[dict]:
     """yfinance doesn't expose a search API. Use NSE for that.
-    This is a placeholder returning empty list — use nse.search() instead.
+    This is a placeholder returning empty list; use nse.search() instead.
     """
     return []
 
