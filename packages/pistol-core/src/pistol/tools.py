@@ -1,14 +1,25 @@
 """Unified tool registry. Each tool returns a ToolResult with data + chart + source."""
 
 from __future__ import annotations
+import json
+import os
 
 import inspect
 import re
 
 from . import charts, compute
-from .compute import indicators as ind
+from .compute import indicators as ind, patterns as pat, signals as sig, volatility as vol, statistics as stat, portfolio as pf, screeners as scr
 from .data import fii_dii, news, yfinance
 from .types import ChartSpec, PriceBar, Quote, ToolResult
+
+# Aliases for back-compat with merged vol/portfolio functions
+volatility = vol
+statistics = stat
+portfolio = pf
+screeners = scr
+patterns = pat
+signals = sig
+
 
 
 NIFTY_50 = [
@@ -21,6 +32,9 @@ NIFTY_50 = [
     "DIVISLAB", "BRITANNIA", "APOLLOHOSP", "HINDALCO", "TATACONSUM", "SBILIFE",
     "HDFCLIFE", "UPL", "LTIM", "SHRIRAMFIN",
 ]
+
+_NSE_SEARCH_UNIVERSE = ["RELIANCE","TCS","INFY","HDFCBANK","SBIN","ICICIBANK","TATAMOTORS","BHARTIARTL","ITC","LT","AXISBANK","KOTAKBANK","ASIANPAINT","MARUTI","SUNPHARMA","WIPRO","HCLTECH","ULTRACEMCO","NESTLEIND","POWERGRID","NTPC","ONGC","TECHM","INDUSINDBK","M&M","BAJFINANCE","BAJAJFINSV","TITAN","ADANIENT","ADANIPORTS","COALINDIA","GRASIM","JSWSTEEL","DRREDDY","CIPLA","DIVISLAB","EICHERMOT","HEROMOTOCO","BRITANNIA","BPCL","IOC","HINDALCO","JINDALSTEL","TATASTEEL","VEDL","ZOMATO","PAYTM","NAUKRI","POLICYBZR","IRCTC","IDEA","SUZLON","YESBANK","BANDHANBNK","FEDERALBNK","IDFCFIRSTB","PNB","BANKBARODA","CANBK","UNIONBANK"]
+
 
 
 SECTOR_MAP = {
@@ -238,7 +252,8 @@ def get_top_movers(period="1d", limit=10, direction="mixed"):
     )
 
 
-def get_advanced_chart(symbol, chart_type="candlestick", period="6mo"):
+def get_advanced_chart(symbol, chart_type="candlestick", period="6mo", indicators=None):
+    """Get candlestick or line chart for a stock. Optionally overlay indicators."""
     sym = symbol.upper()
     bars = _bars_from_yfinance(sym, period=period)
     if not bars:
@@ -252,8 +267,18 @@ def get_advanced_chart(symbol, chart_type="candlestick", period="6mo"):
             y=[b.close for b in bars],
             y_name="close",
         )
-    return ToolResult(tool="get_advanced_chart", symbol=sym, data={"bars": [b.model_dump(mode="json") for b in bars]}, chart=chart, source="yfinance")
-
+    overlays = {}
+    for ind_name in (indicators or []):
+        if ind_name in _INDICATOR_DISPATCH:
+            try:
+                pts = _INDICATOR_DISPATCH[ind_name](bars, period=14)
+                overlays[ind_name] = {
+                    "x": [p.timestamp.isoformat() for p in pts if p.value is not None],
+                    "y": [p.value for p in pts if p.value is not None],
+                }
+            except Exception:
+                overlays[ind_name] = {"error": "compute failed"}
+    return ToolResult(tool="get_advanced_chart", symbol=sym, data={"bars": [b.model_dump(mode="json") for b in bars][-60:], "indicators": overlays}, chart=chart, source="yfinance")
 
 def get_market_pulse(limit=10):
     cap = max(1, min(int(limit), len(NIFTY_50)))
@@ -505,52 +530,6 @@ def get_stock_news_with_sentiment(symbol, limit=10, when="7d"):
     )
 
 
-TOOL_REGISTRY = {
-    "get_stock_quote": get_stock_quote,
-    "get_price_history": get_price_history,
-    "get_indicator": get_indicator,
-    "get_candlestick_patterns": get_candlestick_patterns,
-    "get_signals": get_signals,
-    "screen_stocks": screen_stocks,
-    "backtest_sma": backtest_sma,
-    "get_market_news": get_market_news,
-    "get_stock_news": get_stock_news,
-    "get_shareholding": get_shareholding,
-    "get_financials": get_financials,
-    "get_corporate_actions": get_corporate_actions,
-    "get_company_profile": get_company_profile,
-    "get_top_movers": get_top_movers,
-    "get_advanced_chart": get_advanced_chart,
-    "get_market_pulse": get_market_pulse,
-    "get_index_performance": get_index_performance,
-    "get_market_heatmap": get_market_heatmap,
-    "get_sector_rotation": get_sector_rotation,
-    "list_indices": list_indices,
-    "get_india_vix": get_india_vix,
-    "get_market_breadth": get_market_breadth,
-    "get_new_highs_lows": get_new_highs_lows,
-    "get_fii_dii_flows": get_fii_dii_flows,
-    "get_market_pulse_with_flows": get_market_pulse_with_flows,
-    "get_india_market_news": get_india_market_news,
-    "get_stock_news_with_sentiment": get_stock_news_with_sentiment,    "get_historical_volatility": get_historical_volatility,
-    "get_parkinson_volatility": get_parkinson_volatility,
-    "get_garman_klass_volatility": get_garman_klass_volatility,
-    "get_yang_zhang_volatility": get_yang_zhang_volatility,
-    "get_hurst_exponent": get_hurst_exponent,
-    "get_z_score": get_z_score,
-    "get_correlation": get_correlation,
-    "get_beta": get_beta,
-    "screen_by_indicator": screen_by_indicator,
-    "portfolio_sector_concentration": portfolio_sector_concentration,
-    "portfolio_var": portfolio_var,
-    "portfolio_sharpe": portfolio_sharpe,
-    "portfolio_max_drawdown": portfolio_max_drawdown,
-    "portfolio_correlation_matrix": portfolio_correlation_matrix,
-    "backtest_sma_crossover": backtest_sma_crossover,
-    "search_stocks": search_stocks,
-    "get_batch_quotes": get_batch_quotes,
-    "get_intraday_ticks": get_intraday_ticks,
-}
 
 
 def _hint_to_json_type(h):
@@ -901,3 +880,51 @@ __all__ = [
     "get_stock_news_with_sentiment",
     "claude_tool_schema", "ToolResult",
 ]
+
+TOOL_REGISTRY = {
+    "get_stock_quote": get_stock_quote,
+    "get_price_history": get_price_history,
+    "get_indicator": get_indicator,
+    "get_candlestick_patterns": get_candlestick_patterns,
+    "get_signals": get_signals,
+    "screen_stocks": screen_stocks,
+    "backtest_sma": backtest_sma,
+    "get_market_news": get_market_news,
+    "get_stock_news": get_stock_news,
+    "get_shareholding": get_shareholding,
+    "get_financials": get_financials,
+    "get_corporate_actions": get_corporate_actions,
+    "get_company_profile": get_company_profile,
+    "get_top_movers": get_top_movers,
+    "get_advanced_chart": get_advanced_chart,
+    "get_market_pulse": get_market_pulse,
+    "get_index_performance": get_index_performance,
+    "get_market_heatmap": get_market_heatmap,
+    "get_sector_rotation": get_sector_rotation,
+    "list_indices": list_indices,
+    "get_india_vix": get_india_vix,
+    "get_market_breadth": get_market_breadth,
+    "get_new_highs_lows": get_new_highs_lows,
+    "get_fii_dii_flows": get_fii_dii_flows,
+    "get_market_pulse_with_flows": get_market_pulse_with_flows,
+    "get_india_market_news": get_india_market_news,
+    "get_stock_news_with_sentiment": get_stock_news_with_sentiment,
+    "get_historical_volatility": get_historical_volatility,
+    "get_parkinson_volatility": get_parkinson_volatility,
+    "get_garman_klass_volatility": get_garman_klass_volatility,
+    "get_yang_zhang_volatility": get_yang_zhang_volatility,
+    "get_hurst_exponent": get_hurst_exponent,
+    "get_z_score": get_z_score,
+    "get_correlation": get_correlation,
+    "get_beta": get_beta,
+    "screen_by_indicator": screen_by_indicator,
+    "portfolio_sector_concentration": portfolio_sector_concentration,
+    "portfolio_var": portfolio_var,
+    "portfolio_sharpe": portfolio_sharpe,
+    "portfolio_max_drawdown": portfolio_max_drawdown,
+    "portfolio_correlation_matrix": portfolio_correlation_matrix,
+    "backtest_sma_crossover": backtest_sma_crossover,
+    "search_stocks": search_stocks,
+    "get_batch_quotes": get_batch_quotes,
+    "get_intraday_ticks": get_intraday_ticks,
+}
