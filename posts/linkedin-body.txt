@@ -1,0 +1,30 @@
+Building in public: an AI agent for the Indian stock market.
+
+A few weeks ago I got tired of clicking through six menus every time I wanted to know "is RELIANCE overbought right now?" or "show me top gainers in Nifty 50." The existing tools are either expensive subscriptions, fragile scrapers, or screeners that need a PhD to configure.
+
+So I built one. Free, MIT, talks to any LLM.
+
+pistol — a Python toolkit + MCP server with 53 tools covering:
+• Live quotes for 8,000+ NSE/BSE stocks
+• 20 technical indicators (RSI, MACD, Bollinger, Ichimoku, SuperTrend, ...)
+• 12 candlestick pattern detectors
+• Fundamentals (P/E, P/B, ROE, Piotroski F-Score, peer comparison)
+• Volatility models (Parkinson, Garman-Klass, Yang-Zhang)
+• Backtests, screeners, market breadth, FII/DII flows
+• News search with sentiment
+
+The wedge is AI-native UX. You don't pick 20 filters and click "Run." You type "show me RELIANCE 14-day RSI with a chart" and the LLM picks the right tool, fetches real NSE data, and renders the chart inline.
+
+If you have Claude Code, install it as an MCP:
+  pip install pistol-mcp
+  claude mcp add pistol -- python -m pistol_mcp.server
+
+If you just want the chat:
+  pip install pistol-core
+  uvicorn pistol.chat_app:app
+
+It's a v0.1 demo today. Real bugs, missing features, but the wedge works: type a question, get a real chart with real NSE data in 4 seconds.
+
+Watch this space.
+
+#indianstocks #buildinpublic #aiagents #mcp #quant #claude
