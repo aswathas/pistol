@@ -224,7 +224,7 @@ HTML = """<!doctype html>
     <a>Pricing</a>
   </nav>
   <div class="meta">
-    <strong>110 tools, all free</strong>
+    <strong>53 tools, all free</strong>
     1 dev · MIT · v0.1 demo<br>
     Powered by Claude + 53 tools wired
   </div>
